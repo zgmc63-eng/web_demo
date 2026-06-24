@@ -32,7 +32,7 @@ static int mcp_build_initialized_notification(char *buffer, size_t buffer_len)
 /**
  * 构建 initialize 响应
  */
-static int mcp_build_initialize_response(const char *id_json, char *response, size_t response_len)
+static int mcp_build_initialize_response(int id, char *response, size_t response_len)
 {
     cJSON *root = cJSON_CreateObject();
     cJSON *result = cJSON_CreateObject();
@@ -40,7 +40,7 @@ static int mcp_build_initialize_response(const char *id_json, char *response, si
     cJSON *serverInfo = cJSON_CreateObject();
 
     cJSON_AddStringToObject(root, "jsonrpc", MCP_JSONRPC_VERSION);
-    cJSON_AddNumberToObject(root, "id", atoi(id_json));
+    cJSON_AddNumberToObject(root, "id", id);
     cJSON_AddItemToObject(root, "result", result);
 
     cJSON_AddStringToObject(result, "protocolVersion", MCP_PROTOCOL_VERSION);
@@ -73,13 +73,16 @@ static int mcp_build_initialize_response(const char *id_json, char *response, si
 /**
  * 构建错误响应
  */
-int mcp_build_error_response(const char *id_json, int code, const char *message, char *response, size_t response_len)
+int mcp_build_error_response(int id, int code, const char *message, char *response, size_t response_len)
 {
     cJSON *root = cJSON_CreateObject();
     cJSON *error = cJSON_CreateObject();
 
     cJSON_AddStringToObject(root, "jsonrpc", MCP_JSONRPC_VERSION);
-    cJSON_AddStringToObject(root, "id", id_json);
+    if(id >= 0)
+    {
+        cJSON_AddNumberToObject(root, "id", id);
+    }
     cJSON_AddItemToObject(root, "error", error);
 
     cJSON_AddNumberToObject(error, "code", code);
@@ -99,12 +102,12 @@ int mcp_build_error_response(const char *id_json, int code, const char *message,
 /**
  * 构建 success 响应
  */
-static int mcp_build_success_response(const char *id_json, cJSON *result_obj, char *response, size_t response_len)
+static int mcp_build_success_response(int id, cJSON *result_obj, char *response, size_t response_len)
 {
     cJSON *root = cJSON_CreateObject();
 
     cJSON_AddStringToObject(root, "jsonrpc", MCP_JSONRPC_VERSION);
-    cJSON_AddStringToObject(root, "id", id_json);
+    cJSON_AddStringToObject(root, "id", id);
     if (result_obj)
     {
         cJSON_AddItemToObject(root, "result", result_obj);
@@ -127,20 +130,20 @@ static int mcp_build_success_response(const char *id_json, cJSON *result_obj, ch
 
 /**
  * 处理 initialize 方法（支持 SSE 事件推送）
- * @param id_json 请求ID
+ * @param id 请求ID
  * @param response 响应缓冲区
- * @param response_len 响应缓冲区大小
+ * @param response_len 响应缓冲区大小int
  * @param event_buffer 事件缓冲区（用于 SSE 事件）
  * @param event_buffer_len 事件缓冲区大小
  * @return 0 成功，-1 失败
  */
-int mcp_handle_initialize_ex(const char *id_json, char *response, size_t response_len,
+int mcp_handle_initialize_ex(int id, char *response, size_t response_len,
                               char *event_buffer, size_t event_buffer_len)
 {
     int ret;
     
     /* 构建 initialize 响应 */
-    ret = mcp_build_initialize_response(id_json, response, response_len);
+    ret = mcp_build_initialize_response(id, response, response_len);
     if (ret != 1)
     {
         return ret;
@@ -158,20 +161,20 @@ int mcp_handle_initialize_ex(const char *id_json, char *response, size_t respons
 /**
  * 处理 initialize 方法（简化版本，不使用 SSE）
  */
-static int mcp_handle_initialize(const char *id_json, char *response, size_t response_len)
+static int mcp_handle_initialize(int id, char *response, size_t response_len)
 {
-    return mcp_handle_initialize_ex(id_json, response, response_len, NULL, 0);
+    return mcp_handle_initialize_ex(id, response, response_len, NULL, 0);
 }
 
 /**
  * 处理 tools/list 方法
  */
-static int mcp_handle_tools_list(const char *id_json, char *response, size_t response_len)
+static int mcp_handle_tools_list( int id, char *response, size_t response_len)
 {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", MCP_JSONRPC_VERSION);
-    cJSON_AddStringToObject(root, "id", id_json);
 
+    cJSON_AddNumberToObject(root, "id", id);
     cJSON *result = cJSON_CreateObject();
     cJSON *tools = cJSON_CreateArray();
     cJSON_AddItemToObject(result, "tools", tools);
@@ -216,12 +219,12 @@ static int mcp_handle_tools_list(const char *id_json, char *response, size_t res
 /**
  * 处理 tools/call 方法
  */
-static int mcp_handle_tools_call(const char *id_json, cJSON *params, char *response, size_t response_len)
+static int mcp_handle_tools_call(int id, cJSON *params, char *response, size_t response_len)
 {
     cJSON *result = NULL;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", MCP_JSONRPC_VERSION);
-    cJSON_AddStringToObject(root, "id", id_json);
+    cJSON_AddNumberToObject(root, "id", id);
 
     cJSON *tool_name = cJSON_GetObjectItem(params, "name");
     if (!tool_name)
@@ -280,23 +283,23 @@ static int mcp_handle_tools_call(const char *id_json, cJSON *params, char *respo
  * 处理 MCP 请求
  * 返回 0 表示成功，-1 表示失败
  */
-int mcp_handle_request(const char *id_json, const char *method, cJSON *params, char *response, size_t response_len)
+int mcp_handle_request(int id, const char *method, cJSON *params, char *response, size_t response_len)
 {
     /* 对于 tools/call 方法，使用工具模块处理 */
     if (strcmp(method, "tools/call") == 0 && params)
     {
-        return mcp_handle_tools_call(id_json, params, response, response_len);
+        return mcp_handle_tools_call(id, params, response, response_len);
     }
     else if (strcmp(method, "initialize") == 0)
     {
-        return mcp_handle_initialize(id_json, response, response_len);
+        return mcp_handle_initialize(id, response, response_len);
     }
     else if (strcmp(method, "tools/list") == 0)
     {
-        return mcp_handle_tools_list(id_json, response, response_len);
+        return mcp_handle_tools_list(id, response, response_len);
     }
     else
     {
-        return mcp_build_error_response(id_json ? id_json : "0", -32601, "Method not found", response, response_len);
+        return mcp_build_error_response(id, -32601, "Method not found", response, response_len);
     }
 }

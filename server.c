@@ -286,6 +286,7 @@ static int parse_http_request(const char *buf, char *method, size_t mlen,
         {
             header_line += 2; /* 跳过\r\n */
         }
+            LOG_DEBUG("Header=%s", header_line);
 
         while (header_line && *header_line != '\0' && header_line < headers_start)
         {
@@ -327,13 +328,16 @@ static int parse_http_request(const char *buf, char *method, size_t mlen,
 /**
  * 构建错误响应
  */
-int build_error_response(const char *id_json, int code, const char *message, char *response, size_t response_len)
+int build_error_response(int id, int code, const char *message, char *response, size_t response_len)
 {
     cJSON *root = cJSON_CreateObject();
     cJSON *error = cJSON_CreateObject();
 
     cJSON_AddStringToObject(root, "jsonrpc", MCP_JSONRPC_VERSION);
-    cJSON_AddStringToObject(root, "id", id_json);
+    if(id >= 0)
+    {
+        cJSON_AddNumberToObject(root, "id", id);
+    }
     cJSON_AddItemToObject(root, "error", error);
 
     cJSON_AddNumberToObject(error, "code", code);
@@ -357,6 +361,7 @@ int build_error_response(const char *id_json, int code, const char *message, cha
  */
 static void http_send_json(int fd, int status, const char *json)
 {
+    int keep_alive = 1;
     char header[512];
     size_t body_len = json ? strlen(json) : 0;
 
@@ -365,11 +370,16 @@ static void http_send_json(int fd, int status, const char *json)
              "Content-Type: application/json\r\n"
              "Content-Length: %zu\r\n"
              "Connection: close\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+             "Access-Control-Allow-Methods: POST, OPTIONS\r\n"
+             "Access-Control-Allow-Headers: content-type, Accept, mcp-protocol-version\r\n"
              "\r\n",
              status, status == 200 ? "OK" : "Bad Request", body_len);
 
     /* 输出响应基本信息和body内容（总是输出） */
     LOG("=== HTTP Response ===");
+    LOG_DEBUG("Header: %s", header);
+
     LOG("Status: %d", status);
     if (body_len > 0) {
         LOG("Body: %s", json);
@@ -407,6 +417,8 @@ static void http_send_sse(int fd, const char *json)
     /* 输出 SSE 响应基本信息和body内容（总是输出） */
     LOG("=== SSE Response ===");
     LOG("Event: message");
+    LOG_DEBUG("Header: %s", header);
+
     LOG("Data: %s", json);
     LOG("====================");
 
@@ -460,17 +472,10 @@ static void handle_client(int client_fd)
         FD_ZERO(&read_fds);
         FD_SET(client_fd, &read_fds);
 
-        timeout.tv_sec = 10;
-        timeout.tv_usec = 0;
-
         int ret = select(client_fd + 1, &read_fds, NULL, NULL, &timeout);
         if (ret <= 0)
         {
-            if (ret == 0) {
-                printf("server: client read timeout\n");
-            } else {
-                printf("server: select failed: %s\n", strerror(errno));
-            }
+            printf("server: select failed or timeout\n");
             break;
         }
 
@@ -519,23 +524,23 @@ static void handle_client(int client_fd)
             if (!root)
             {
                 printf("server: JSON parse error: %s\n", cJSON_GetErrorPtr());
-                build_error_response("null", -32700, "Parse error", response, sizeof(response));
+                build_error_response(-1, -32700, "Parse error", response, sizeof(response));
                 http_send_json(client_fd, 200, response);
                 continue;
             }
 
             /* 获取id和method */
-            cJSON *id = cJSON_GetObjectItem(root, "id");
-            char id_json[40] = "null";
-            if (id)
+            cJSON *idJson = cJSON_GetObjectItem(root, "id");
+            int id = -1;
+            if (idJson)
             {
-                if (cJSON_IsString(id))
+                if (cJSON_IsString(idJson))
                 {
-                    snprintf(id_json, sizeof(id_json), "\"%s\"", id->valuestring);
+                    id = atoi(idJson->valuestring);
                 }
-                else if (cJSON_IsNumber(id))
+                else if (cJSON_IsNumber(idJson))
                 {
-                    snprintf(id_json, sizeof(id_json), "%d", id->valueint);
+                    id = idJson->valueint;
                 }
             }
 
@@ -543,13 +548,13 @@ static void handle_client(int client_fd)
             if (!method_item || !cJSON_IsString(method_item))
             {
                 printf("server: method not found\n");
-                build_error_response(id_json, -32600, "Invalid Request: method required", response, sizeof(response));
+                build_error_response(id, -32600, "Invalid Request: method required", response, sizeof(response));
                 http_send_json(client_fd, 200, response);
                 cJSON_Delete(root);
                 continue;
             }
 
-            LOG_INFO("Request method=%s, id=%s", method_item->valuestring, id_json);
+            LOG_INFO("Request method=%s, id=%d", method_item->valuestring, id);
 
             /* 获取params */
             cJSON *params = cJSON_GetObjectItem(root, "params");
@@ -562,7 +567,7 @@ static void handle_client(int client_fd)
                 LOG_DEBUG("=== Initialize Request (SSE Mode) ===");
                 
                 /* 调用 MCP 处理 initialize 方法（带事件推送）*/
-                int ret = mcp_handle_initialize_ex(id_json, response, sizeof(response),
+                int ret = mcp_handle_initialize_ex(id, response, sizeof(response),
                                                    event_buffer, sizeof(event_buffer));
                 if (ret == 0)
                 {
@@ -575,22 +580,32 @@ static void handle_client(int client_fd)
                 /* 发送 initialize 响应（SSE 格式） */
                 http_send_sse(client_fd, response);
                 
-                /* 发送 notifications/initialized 事件 */
-                if (event_buffer[0] != '\0')
-                {
-                    http_send_sse_event(client_fd, event_buffer);
-                    LOG("Sent notifications/initialized event");
-                }
+                // /* 发送 notifications/initialized 事件 */
+                // if (event_buffer[0] != '\0')
+                // {
+                //     http_send_sse_event(client_fd, event_buffer);
+                //     LOG("Sent notifications/initialized event");
+                // }
                 
                 /* SSE 模式下保持连接不关闭 */
                 LOG("SSE connection kept alive");
                 
                 cJSON_Delete(root);
-                continue; /* 继续等待后续请求 */
+                // continue; /* 继续等待后续请求 */
+                break;
             }
-            
+            else if (strcmp(method_item->valuestring, "notifications/initialized") == 0)
+            {
+                LOG("Client initialized");
+                //无需响应
+                // http_send_json(client_fd, 204, "");
+                http_send_json(client_fd, 200, "");
+                // continue;
+                // http_send_sse(client_fd, "");
+                break;
+            }
             /* 调用 MCP 处理方法 */
-            if (mcp_handle_request(id_json, method_item->valuestring, params, response, sizeof(response)) == 0)
+            if (mcp_handle_request(id, method_item->valuestring, params, response, sizeof(response)) == 0)
             {
                 LOG("Request failed: %s", method_item->valuestring);
                 http_send_json(client_fd, 200, response);
@@ -643,7 +658,7 @@ static void handle_client(int client_fd)
  */
 int server_start(void)
 {
-    g_server_fd = create_server(g_server_config.port);
+    g_server_fd = create_server(3001);
     if (g_server_fd < 0)
     {
         return -1;

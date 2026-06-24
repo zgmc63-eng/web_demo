@@ -19,17 +19,17 @@
  * @param event_buffer_len 事件缓冲区大小
  * @return 0 成功，-1 失败
  */
-int mcp_handle_initialize_ex(const char *id_json, char *response, size_t response_len,
+int mcp_handle_initialize_ex(int id, char *response, size_t response_len,
                               char *event_buffer, size_t event_buffer_len);
 
 /**
  * 构建错误响应
  */
-int mcp_build_error_response(const char *id_json, int code, const char *message, char *response, size_t response_len);
+int mcp_build_error_response(int id, int code, const char *message, char *response, size_t response_len);
 
 /**
  * 处理 MCP 请求
  */
-int mcp_handle_request(const char *id_json, const char *method, cJSON *params, char *response, size_t response_len);
+int mcp_handle_request(int id, const char *method, cJSON *params, char *response, size_t response_len);
 
 #endif /* MCP_H */

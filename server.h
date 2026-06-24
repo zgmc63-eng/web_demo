@@ -37,6 +37,6 @@ void server_stop(void);
 /**
  * 构建错误响应
  */
-int build_error_response(const char *id_json, int code, const char *message, char *response, size_t response_len);
+int build_error_response(int id, int code, const char *message, char *response, size_t response_len);
 
 #endif /* SERVER_H */
